@@ -147,6 +147,7 @@ class TransformerWrapper(nn.Module):
         N_CODEBOOKS = 8
         TEXT_BLOCK_LENGTH = 128
         ACOUSTIC_BLOCK_LENGTH = 750
+        temperature = 0.9
         device = text_block.device
         
         assert text_block.shape[0]==1 and acoustic_block.shape[0]==1
@@ -174,7 +175,7 @@ class TransformerWrapper(nn.Module):
                 logits = self.out_proj[cur_pos_depth - 1](depth_out)
                 if cur_pos_depth > 1:
                     logits = logits[:,:,:-1]
-                next_token = ras_sampling(logits[:,-1].squeeze(0), code_gen[cur_pos_depth-1])
+                next_token = ras_sampling(logits[:,-1].squeeze(0)/ temperature, code_gen[cur_pos_depth-1])
                 if end_delay!=0 and cur_pos_depth==1:
                     next_token = torch.ones_like(next_token)*CODEBOOK_SIZE
                 if next_token == CODEBOOK_SIZE:
@@ -480,17 +481,11 @@ class Trainer(object):
             # labels = torch.cat((text_block, acoustic_block),dim=-1)
             with self.accelerator.autocast():
                 logits, target = self.lm(text_block, acoustic_block)
-                loss = 0
-                for i in range(N_CODEBOOKS):
-                    loss_i, right_cnt, total_cnt,\
-                        top1_rate = ce_loss(logits[:,i:i+1,:].transpose(1,2),
-                                            target[:,i:i+1],
-                                            torch.LongTensor([1]*logits.shape[0]).to(device),device)
-                    if i==0:
-                        loss += loss_i*100
-                    else:
-                        loss += loss_i
-                loss = loss / self.gradient_accumulate_every / N_CODEBOOKS
+                loss, right_cnt, total_cnt,\
+                    top1_rate = ce_loss(logits[:,:,:].transpose(1,2),
+                                        target[:,:],
+                                        torch.LongTensor([N_CODEBOOKS]*logits.shape[0]).to(device),device)
+                loss = loss / self.gradient_accumulate_every
                 total_loss += loss.item()
             self.accelerator.backward(loss)
         grad_norm = get_grad_norm(self.lm)
@@ -575,8 +570,8 @@ if __name__ == '__main__':
     config_path = 'config/config.yaml'
     trainer = Trainer(cfg_path=config_path)
     trainer.load({
-                'discriminator':'dptts/logs/2024-12-11-17-21-00/discriminator-697.pt',#disc
-                'vq':'dptts/logs/2024-12-11-17-21-00/vq-697.pt',#vq
-                'lm':'dptts/logs/2024-12-17-14-36-22/lm-40.pt',#lm
+                'discriminator':'logs/2024-12-11-17-21-00/discriminator-697.pt',#disc
+                'vq':'logs/2024-12-11-17-21-00/vq-697.pt',#vq
+                'lm':'logs/2025-01-08-11-50-13/lm-4.pt',#lm
                 })
     trainer.train()
